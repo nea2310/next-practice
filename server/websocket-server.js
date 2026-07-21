@@ -2,25 +2,12 @@
 import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import { prisma } from '../lib/prisma.js';
 
 dotenv.config();
 
 const WS_PORT = process.env.WS_PORT || 5001;
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-
-// ---- In-memory хранилище уведомлений ----
-let dataStore = {
-    items: [
-        { id: 'init-1', text: 'Initial item 1' },
-        { id: 'init-2', text: 'Initial item 2' },
-    ],
-    lastUpdate: Date.now(),
-};
-let idCounter = 3;
-
-function generateId() {
-    return `item-${idCounter++}`;
-}
 
 // ---- Клиенты WebSocket ----
 const clients = new Set();
@@ -31,10 +18,16 @@ function getTokenFromUrl(url) {
     return parsedUrl.searchParams.get('token');
 }
 
+// ---- Генератор ID (временный, пока используем) ----
+let idCounter = 1000;
+function generateId() {
+    return `item-${idCounter++}`;
+}
+
 // ---- Создание WebSocket-сервера ----
 const wss = new WebSocketServer({ port: WS_PORT });
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
     const token = getTokenFromUrl(req.url);
     if (!token) {
         ws.close(1008, 'Unauthorized');
@@ -53,8 +46,24 @@ wss.on('connection', (ws, req) => {
     ws.user = user;
     clients.add(ws);
 
-    ws.on('message', (message) => {
+
+    // ---- Отправляем все уведомления пользователя из БД ----
+    try {
+        const notifications = await prisma.notification.findMany({
+            where: { userId: user.id },
+            orderBy: { createdAt: 'desc' },
+        });
+        ws.send(JSON.stringify({ type: 'init', payload: notifications }));
+    } catch (err) {
+        console.error('❌ Failed to fetch notifications:', err);
+        ws.close(1011, 'Internal Server Error');
+        return;
+    }
+
+    // ---- Обработка сообщений от клиента ----
+    ws.on('message', async (message) => {
         console.log('📩 Получено от клиента:', message.toString());
+        // Здесь можно обработать команды от клиента (например, пометить как прочитанное)
     });
 
     ws.on('close', () => {
@@ -67,26 +76,42 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// ---- Эмуляция новых уведомлений ----
-setInterval(() => {
-    const newItem = {
-        id: generateId(),
-        text: `Item ${Date.now()}`,
-    };
-    dataStore.items.push(newItem);
-    dataStore.lastUpdate = Date.now();
-
-    const payload = JSON.stringify({
-        type: 'update',
-        payload: [newItem],
-    });
-
+// ---- Эмуляция новых уведомлений (каждые 10 секунд) ----
+setInterval(async () => {
+    // Генерируем новое уведомление для каждого подключённого пользователя
+    // В реальном проекте уведомления могут приходить из внешнего источника
     for (const client of clients) {
-        if (client.readyState === 1) { // WebSocket.OPEN = 1
-            client.send(payload);
+        if (client.readyState !== 1) continue; // WebSocket.OPEN = 1
+
+        const user = client.user;
+        if (!user) continue;
+
+        const newItem = {
+            id: generateId(),
+            text: `Item ${Date.now()}`,
+        };
+
+        try {
+            // Сохраняем в БД
+            await prisma.notification.create({
+                data: {
+                    id: newItem.id,
+                    text: newItem.text,
+                    userId: user.id,
+                    isNew: true,
+                },
+            });
+
+            // Отправляем клиенту
+            client.send(JSON.stringify({
+                type: 'update',
+                payload: [newItem],
+            }));
+            console.log(`📤 Отправлено обновление: ${newItem.text} (id: ${newItem.id})`);
+        } catch (err) {
+            console.error('❌ Failed to create notification:', err);
         }
     }
-    console.log(`📤 Отправлено обновление: ${newItem.text} (id: ${newItem.id})`);
 }, 10000);
 
 console.log(`✅ WebSocket server running on port ${WS_PORT}`);

@@ -1,25 +1,26 @@
-// app/(main)/notifications/page.tsx
-import { Suspense } from 'react';
+import { prisma } from '@/lib/prisma';
+import { getCurrentUser } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import { isAuthenticated } from '@/lib/auth';
-import { dataStore } from '@/lib/db';
 import { NotificationListClient } from '@components/NotificationListClient';
 
-export default async function NotificationsPage() {
-  // Проверяем авторизацию на сервере
-  if (!(await isAuthenticated())) {
-    redirect('/login');
-  }
 
-  // Получаем начальные данные напрямую (без API)
-  const initialData = dataStore;
+export default async function NotificationsPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
+
+  console.log('DATABASE_URL:', process.env.DATABASE_URL);
+
+  const notifications = await prisma.notification.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  console.log('notifications:', notifications);
 
   return (
     <div style={{ padding: '20px' }}>
-      <h1>Уведомления Notifications</h1>
-      <Suspense fallback={<div>Загрузка...</div>}>
-        <NotificationListClient initialData={initialData} />
-      </Suspense>
+      <h1>Уведомления</h1>
+      <NotificationListClient initialNotifications={notifications} />
     </div>
   );
 }

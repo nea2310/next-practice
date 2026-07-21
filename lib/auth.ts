@@ -1,73 +1,75 @@
-// lib/auth.ts
-import jwt from 'jsonwebtoken';
+import { prisma } from './prisma';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { cookies } from 'next/headers';
-import { users } from './db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-const TOKEN_EXPIRY = '1h';
 
-export function generateToken(user: { id: string; username: string }) {
-  return jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, {
-    expiresIn: TOKEN_EXPIRY,
+export async function findUserByUsername(username: string) {
+  return prisma.user.findUnique({ where: { username } });
+}
+
+export async function createUser(username: string, password: string) {
+  const hash = await bcrypt.hash(password, 10);
+  return prisma.user.create({
+    data: { username, passwordHash: hash },
   });
 }
 
-export function verifyToken(token: string) {
-  return jwt.verify(token, JWT_SECRET) as { id: string; username: string };
-}
-
-export async function hashPassword(password: string) {
-  return bcrypt.hash(password, 10);
-}
-
-export async function comparePassword(password: string, hash: string) {
+export async function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
 
-export function findUserByUsername(username: string) {
-  return users.find((u) => u.username === username);
+export function generateToken(user: { id: string; username: string }) {
+  return jwt.sign(
+    { id: user.id, username: user.username },
+    process.env.JWT_SECRET!,
+    { expiresIn: '1h' }
+  );
 }
 
-// Установка httpOnly cookie с токеном
 export async function setAuthCookie(token: string) {
   (await cookies()).set('token', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/',
-    maxAge: 60 * 60, // 1 час
+    maxAge: 60 * 60,
   });
 }
 
-// Удаление cookie (выход)
 export async function clearAuthCookie() {
   (await cookies()).delete('token');
 }
 
-// Получение токена из cookie (на сервере)
+export async function getCurrentUser() {
+  const token = (await cookies()).get('token')?.value;
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: string; username: string };
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
 export async function getAuthToken() {
   return (await cookies()).get('token')?.value;
 }
 
-// Проверка, авторизован ли пользователь (на сервере)
-export async function isAuthenticated() {
-  const token = await getAuthToken();
-  if (!token) return false;
+// ---- Проверка JWT (новая функция) ----
+export function verifyToken(token: string) {
   try {
-    verifyToken(token);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function getCurrentUser() {
-  const token = await getAuthToken();
-  if (!token) return null;
-  try {
-    return verifyToken(token);
+    return jwt.verify(token, JWT_SECRET) as { id: string; username: string };
   } catch {
     return null;
   }
+}
+
+// ---- Проверка авторизации (для Server Components) ----
+export async function isAuthenticated() {
+  const token = await getAuthToken();
+  if (!token) return false;
+  const decoded = verifyToken(token);
+  return decoded !== null;
 }

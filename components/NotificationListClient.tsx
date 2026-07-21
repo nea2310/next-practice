@@ -1,21 +1,22 @@
+// app/(main)/notifications/components/NotificationListClient.tsx
 'use client';
 
 import { useRef, useCallback } from 'react';
 import { List, type RowComponentProps } from 'react-window';
 import { useNotifications } from '@/app/context/NotificationsContext';
 
-type NotificationItemData = {
+type NotificationItem = {
   id: string;
   text: string;
   isNew: boolean;
 };
 
 const Row = ({
-  index,
-  names,
-  style,
-}: RowComponentProps<{
-  names: NotificationItemData[];
+               index,
+               names,
+               style,
+             }: RowComponentProps<{
+  names: NotificationItem[];
 }>) => {
   const item = names[index];
   return (
@@ -32,15 +33,22 @@ const Row = ({
   );
 };
 
-export function NotificationListClient() {
+export function NotificationListClient({
+                                         initialNotifications,
+                                       }: {
+  initialNotifications: NotificationItem[];
+}) {
   const { notifications, markAsViewed } = useNotifications();
   const seenIds = useRef<Set<string>>(new Set());
+
+  // Используем данные из контекста (с WebSocket), если они есть, иначе initial
+  const items = notifications.length > 0 ? notifications : initialNotifications;
 
   const onItemsRendered = useCallback(
     ({ startIndex, stopIndex }: { startIndex: number; stopIndex: number }) => {
       const newIds: string[] = [];
       for (let i = startIndex; i <= stopIndex; i++) {
-        const item = notifications[i];
+        const item = items[i];
         if (item && item.isNew && !seenIds.current.has(item.id)) {
           seenIds.current.add(item.id);
           newIds.push(item.id);
@@ -50,7 +58,7 @@ export function NotificationListClient() {
         markAsViewed(newIds);
       }
     },
-    [notifications, markAsViewed]
+    [items, markAsViewed]
   );
 
   const ITEM_HEIGHT = 60;
@@ -58,10 +66,10 @@ export function NotificationListClient() {
   return (
     <List
       className={'list'}
-      rowCount={notifications.length}
+      rowCount={items.length}
       rowHeight={ITEM_HEIGHT}
       rowComponent={Row}
-      rowProps={{ names: notifications }}
+      rowProps={{ names: items }}
       onRowsRendered={onItemsRendered}
     />
   );
